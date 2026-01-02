@@ -1,0 +1,43 @@
+[package]
+name = "chain_editor"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bevy = { version = "0.17.2", default-features = false, features = [
+    "bevy_asset",
+    "bevy_color",
+    "bevy_core_pipeline",
+    "bevy_gilrs",
+    "bevy_gltf",
+    "bevy_log",
+    "bevy_pbr",
+    "bevy_render",
+    "bevy_text",
+    "bevy_ui",
+    "bevy_ui_render",
+    "bevy_ui_picking_backend",
+    "bevy_window",
+    "bevy_winit",
+    "multi_threaded",
+    "std",
+    "sysinfo_plugin",
+    "tonemapping_luts",
+    "x11",
+    "bevy_mesh_picking_backend",
+    "bevy_dev_tools",
+    "default_font",
+    "zstd_c",
+    "bevy_anti_alias",
+    "bevy_post_process",
+    "reflect_auto_register",
+    "experimental_bevy_feathers",
+    "bevy_input_focus",
+    "debug",
+    "track_location",
+    "png",
+    #"trace",
+    ]}
+avian3d = { version = "0.4.1"}
+quote = "1.0.42"
+proc-macro2 = "=1.0.104"

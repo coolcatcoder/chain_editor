@@ -1,0 +1,1 @@
+use bevy :: prelude :: * ; pub fn spawn (asset_server : & AssetServer , commands : & mut Commands) { let mut deserialise = crate :: Deserialise :: new (asset_server , commands) ; }
