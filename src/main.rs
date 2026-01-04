@@ -1,17 +1,30 @@
-use std::{collections::HashMap, f32::consts::FRAC_PI_2, fs::write};
 use avian3d::prelude::*;
 use bevy::{
-    camera::RenderTarget, color::palettes::css::RED, ecs::entity::EntityHashMap, feathers::{FeathersPlugins, controls::{ButtonProps, button, radio}, dark_theme::create_dark_theme, theme::{ThemeBackgroundColor, ThemedText, UiTheme}, tokens}, input::{
+    camera::RenderTarget,
+    color::palettes::css::RED,
+    ecs::entity::EntityHashMap,
+    feathers::{
+        FeathersPlugins,
+        dark_theme::create_dark_theme,
+        theme::UiTheme,
+    },
+    input::{
         ButtonState,
         keyboard::KeyboardInput,
         mouse::{MouseButtonInput, MouseMotion},
-    }, input_focus::tab_navigation::TabGroup, prelude::{Node as UiNode, *}, ui::Checked, ui_widgets::{Activate, RadioGroup, observe}, window::{CursorGrabMode, CursorOptions, WindowRef}
+    },
+    prelude::*,
+    ui_widgets::Activate,
+    window::{CursorGrabMode, CursorOptions, WindowRef},
 };
 use prelude::*;
-use proc_macro2::TokenStream;
 use quote::quote;
+use std::{collections::HashMap, f32::consts::FRAC_PI_2, fs::write};
+
+use crate::ui::UiBuilder;
 
 mod slime;
+mod ui;
 
 mod prelude {
     use bevy::prelude::*;
@@ -36,7 +49,7 @@ fn plugin(app: &mut App) {
         .add_observer(join);
 }
 
-fn start(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
+fn start(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ui_builder: UiBuilder) {
     commands.insert_resource(SphereMesh(meshes.add(Sphere::new(0.03))));
     // let material = materials.add(StandardMaterial {
     //     ..default()
@@ -46,17 +59,26 @@ fn start(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>) {
         .spawn((Window::default(), EditorWindow))
         .observe(save)
         .id();
-    let camera = commands.spawn((
-        Camera3d::default(),
-        Transform::default(),
-        Camera {
-            target: RenderTarget::Window(WindowRef::Entity(window)),
-            ..default()
-        },
-        EditorCamera,
-    )).id();
+    let camera = commands
+        .spawn((
+            Camera3d::default(),
+            Transform::default(),
+            Camera {
+                target: RenderTarget::Window(WindowRef::Entity(window)),
+                ..default()
+            },
+            EditorCamera,
+        ))
+        .id();
 
-    commands.spawn((ui(), UiTargetCamera(camera)));
+    //commands.spawn((ui(), UiTargetCamera(camera)));
+    let mut ui = ui_builder.on_camera(camera);
+
+    ui.button("Test.")
+        .observe(|_: On<Activate>| info!("Test pressed!"))
+        .button("blah");
+    ui.radio_buttons([("Join at position.", JoinMode::AtPosition), ("Join at centre.", JoinMode::AtCentre)]);
+    ui.button("text");
 }
 
 #[derive(Component)]
@@ -90,7 +112,7 @@ fn render_node(
                 materials.0.insert(material.clone());
             }
             NodeMesh::FromGltf(path) => {
-                todo!();
+                todo!("Render gltf from {path}.");
             }
         }
     }
@@ -101,8 +123,6 @@ enum NodeMesh {
     Sphere(Handle<StandardMaterial>),
     FromGltf(&'static str),
 }
-
-struct Join(usize, usize);
 
 #[derive(Resource)]
 struct SphereMesh(Handle<Mesh>);
@@ -125,17 +145,24 @@ fn selected(selected: Res<Selected>, node: Query<(&Node, &Transform)>, mut gizmo
     gizmos.sphere(transform.translation, node.radius + 0.01, RED);
 }
 
+#[derive(Resource, Component, Clone)]
+enum JoinMode {
+    AtPosition,
+    AtCentre,
+}
+
 fn join(
     on: On<Pointer<Click>>,
-    transform_rigid_body_and_has_mesh: Query<(&GlobalTransform, Has<RigidBody>), With<Mesh3d>>,
+    target: Query<(&GlobalTransform, Has<RigidBody>, Option<&Node>), With<Mesh3d>>,
     materials: Res<Materials>,
+    join_mode: Res<JoinMode>,
     mut material_assets: ResMut<Assets<StandardMaterial>>,
     mut selected: ResMut<Selected>,
     mut commands: Commands,
 ) {
     // Surprisingly the window and its ilk can send Pointer<Click> events.
     // Checking for the mesh while getting the transform filters them out.
-    let Ok((transform, has_rigid_body)) = transform_rigid_body_and_has_mesh.get(on.entity) else {
+    let Ok((target_transform, target_has_rigid_body, target_node)) = target.get(on.entity) else {
         return;
     };
 
@@ -149,7 +176,7 @@ fn join(
     }
 
     // Joints only work if both entities have rigid bodies.
-    if !has_rigid_body {
+    if !target_has_rigid_body {
         commands.entity(on.entity).insert(RigidBody::Static);
     }
 
@@ -177,13 +204,20 @@ fn join(
         ))
         .id();
 
-    commands.spawn(
-        DistanceJoint::new(on.entity, new_entity)
-            .with_limits(0., 0.03)
-            .with_local_anchor1(hit_position - transform.translation()),
-    );
-
-    info!("Spawned.");
+    if let Some(target_node) = target_node && matches!(*join_mode, JoinMode::AtCentre) {
+        info!("Joined at centre.");
+        commands.spawn(
+            DistanceJoint::new(on.entity, new_entity)
+                .with_limits(0., target_node.radius + 0.03),
+        );
+    } else {
+        info!("Joined at position.");
+        commands.spawn(
+            DistanceJoint::new(on.entity, new_entity)
+                .with_limits(0., 0.03)
+                .with_local_anchor1(hit_position - target_transform.translation()),
+        );
+    }
 }
 
 fn mouse(
@@ -192,7 +226,7 @@ fn mouse(
     mut mouse_motion: MessageReader<MouseMotion>,
     mut mouse_button_input: MessageReader<MouseButtonInput>,
     mut pressed: Local<bool>,
-    mut ui_visibility: Single<&mut Visibility, With<Ui>>,
+    mut ui_visibility: Single<&mut Visibility, With<UiTargetCamera>>,
 ) {
     for mouse_button_input in mouse_button_input.read() {
         if !matches!(mouse_button_input.button, MouseButton::Right) {
@@ -281,26 +315,49 @@ fn controls(
 
 fn save(_: On<Remove, Window>, nodes: Query<(Entity, &Node, &Transform), Changed<Node>>) {
     let mut serialise = Serialise::default();
-    let nodes = nodes
-        .iter()
-        .map(|(entity, node, transform)| serialise.node(entity, node, transform.translation));
+
+    let nodes = nodes.iter().map(|(entity, node, transform)| {
+        let entity = serialise.entity(entity);
+        let mesh = match &node.mesh {
+            NodeMesh::Sphere(material) => {
+                let handle = serialise.material(material);
+
+                quote! {
+                    crate::NodeMeshSerialised::Sphere(#handle)
+                }
+            }
+            NodeMesh::FromGltf(path) => {
+                quote! {
+                    crate::NodeMeshSerialised::FromGltf(#path)
+                }
+            }
+        };
+
+        let [x, y, z] = transform.translation.to_array();
+
+        quote! {
+            parameters.set_node(#entity, crate::NodeBuilder::default().mesh(#mesh).translation(Vec3::new(#x, #y, #z)));
+        }
+    });
 
     let token_stream = quote! {
         use bevy::prelude::*;
 
-        pub fn spawn(asset_server: &AssetServer, commands: &mut Commands) {
-            let mut deserialise = crate::Deserialise::new(asset_server, commands);
+        pub fn spawn(mut parameters: crate::SpawnParameters) {
             #(
-                let node = #nodes;
-                deserialise.set_node(node);
+                #nodes
             )*
         }
 
     };
 
+    // Format the token stream using prettyplease. This makes it easier to debug the generated code.
+    let file = syn::parse2::<syn::File>(token_stream).unwrap();
+    let formatted_token_stream = prettyplease::unparse(&file);
+
     write(
         "/home/coolcatcoder/Documents/GitHub/chain_editor/src/slime/map.rs",
-        token_stream.to_string(),
+        formatted_token_stream,
     )
     .unwrap();
 }
@@ -309,51 +366,69 @@ fn save(_: On<Remove, Window>, nodes: Query<(Entity, &Node, &Transform), Changed
 struct Serialise {
     entity: EntityHashMap<u32>,
     material: HashMap<AssetId<StandardMaterial>, u32>,
+    /// The next id to be used.
+    /// An id is unique across all hashmaps.
     next: u32,
 }
 
 impl Serialise {
-    fn next(&mut self) -> u32 {
-        let next = self.next;
-        self.next += 1;
-        next
+    fn entity(&mut self, entity: Entity) -> u32 {
+        let mut next = self.next;
+        let entity = *self.entity.entry(entity).or_insert_with(|| {
+            let previous_next = next;
+            next += 1;
+            previous_next
+        });
+        self.next = next;
+        entity
     }
 
-    fn node(&mut self, entity: Entity, node: &Node, translation: Vec3) -> TokenStream {
-        let next = self.next();
-        let entity = *self.entity.entry(entity).or_insert(next);
-
-        let translation = translation.to_array();
-
-        let mesh = match &node.mesh {
-            NodeMesh::Sphere(material) => {
-                let next = self.next();
-                let material = self.material.entry(material.id()).or_insert(next);
-
-                quote! {
-                    crate::NodeMesh::Sphere(deserialise.get_material(#material))
-                }
-            }
-            NodeMesh::FromGltf(path) => {
-                quote! {
-                    crate::NodeMesh::FromGltf(#path)
-                }
-            }
-        };
-
-        quote! {
-            (
-            #entity,
-            crate::Node {
-                mesh: #mesh,
-            },
-            Vec3::new(#(#translation),*),
-            )
-        }
+    fn material(&mut self, handle: &Handle<StandardMaterial>) -> u32 {
+        let mut next = self.next;
+        let handle = *self.material.entry(handle.id()).or_insert_with(|| {
+            let previous_next = next;
+            next += 1;
+            previous_next
+        });
+        self.next = next;
+        handle
     }
+
+    // fn node(&mut self, entity: Entity, node: &Node, translation: Vec3) -> TokenStream {
+    //     let next = self.next();
+    //     let entity = *self.entity.entry(entity).or_insert(next);
+
+    //     let translation = translation.to_array();
+
+    //     let mesh = match &node.mesh {
+    //         NodeMesh::Sphere(material) => {
+    //             let next = self.next();
+    //             let material = self.material.entry(material.id()).or_insert(next);
+
+    //             quote! {
+    //                 crate::NodeMesh::Sphere(deserialise.get_material(#material))
+    //             }
+    //         }
+    //         NodeMesh::FromGltf(path) => {
+    //             quote! {
+    //                 crate::NodeMesh::FromGltf(#path)
+    //             }
+    //         }
+    //     };
+
+    //     quote! {
+    //         (
+    //         #entity,
+    //         crate::Node {
+    //             mesh: #mesh,
+    //         },
+    //         Vec3::new(#(#translation),*),
+    //         )
+    //     }
+    // }
 }
 
-struct Deserialise<'a, 'c, 'w, 's> {
+struct SpawnParameters<'a, 'c, 'w, 's> {
     asset_server: &'a AssetServer,
     commands: &'c mut Commands<'w, 's>,
 
@@ -361,7 +436,34 @@ struct Deserialise<'a, 'c, 'w, 's> {
     material: HashMap<u32, Handle<StandardMaterial>>,
 }
 
-impl<'a, 'c, 'w, 's> Deserialise<'a, 'c, 'w, 's> {
+enum NodeMeshSerialised {
+    Sphere(u32),
+    FromGltf(&'static str),
+}
+
+#[derive(Default)]
+struct NodeBuilder {
+    mesh: Option<NodeMeshSerialised>,
+    radius: Option<f32>,
+    translation: Option<Vec3>,
+}
+
+impl NodeBuilder {
+    fn mesh(self, mesh: NodeMeshSerialised) -> Self {
+        Self {
+            mesh: Some(mesh),
+            ..self
+        }
+    }
+    fn translation(self, translation: Vec3) -> Self {
+        Self {
+            translation: Some(translation),
+            ..self
+        }
+    }
+}
+
+impl<'a, 'c, 'w, 's> SpawnParameters<'a, 'c, 'w, 's> {
     fn new(asset_server: &'a AssetServer, commands: &'c mut Commands<'w, 's>) -> Self {
         Self {
             asset_server,
@@ -378,80 +480,29 @@ impl<'a, 'c, 'w, 's> Deserialise<'a, 'c, 'w, 's> {
             .clone()
     }
 
-    fn set_node(&mut self, (key, node, translation): (u32, Node, Vec3)) {
+    fn set_node(&mut self, key: u32, node_builder: NodeBuilder) {
+        let mesh = node_builder
+            .mesh
+            .map(|mesh| match mesh {
+                NodeMeshSerialised::Sphere(handle) => NodeMesh::Sphere(self.get_material(handle)),
+                NodeMeshSerialised::FromGltf(path) => NodeMesh::FromGltf(path),
+            })
+            .unwrap_or_else(|| todo!());
+
+        let node = Node {
+            mesh,
+            radius: node_builder.radius.unwrap_or(0.03),
+        };
+
         let entity = self
             .commands
-            .spawn((node, Transform::from_translation(translation)))
+            .spawn((
+                node,
+                Transform::from_translation(node_builder.translation.unwrap_or(Vec3::ZERO)),
+            ))
             .id();
         if self.entity.insert(key, entity).is_some() {
             panic!("Double set has occurred!");
         }
     }
-}
-
-#[derive(Component)]
-struct Ui;
-
-fn ui() -> impl Bundle {
-    (
-        Ui,
-        UiNode {
-            width: percent(30),
-            height: percent(100),
-            align_items: AlignItems::Start,
-            justify_content: JustifyContent::Start,
-            display: Display::Flex,
-            flex_direction: FlexDirection::Column,
-            row_gap: px(10),
-            ..default()
-        },
-        TabGroup::default(),
-        ThemeBackgroundColor(tokens::WINDOW_BG),
-        children![(
-            UiNode {
-                display: Display::Flex,
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::Stretch,
-                justify_content: JustifyContent::Start,
-                padding: UiRect::all(px(8)),
-                row_gap: px(8),
-                width: percent(100),
-                min_width: px(200),
-                ..default()
-            },
-            children![
-                (
-                    UiNode {
-                        display: Display::Flex,
-                        flex_direction: FlexDirection::Row,
-                        align_items: AlignItems::Center,
-                        justify_content: JustifyContent::Start,
-                        column_gap: px(8),
-                        ..default()
-                    },
-                    children![
-                        (
-                            button(
-                                ButtonProps::default(),
-                                (),
-                                Spawn((Text::new("Normal"), ThemedText))
-                            ),
-                            observe(|_activate: On<Activate>| {
-                                info!("Normal button clicked!");
-                            })
-                        ),
-                        (
-                            RadioGroup,
-                            Visibility::Inherited,
-                            children![
-                                radio(Checked, Spawn((Text::new("One"), ThemedText))),
-                                radio((), Spawn((Text::new("Two"), ThemedText))),
-                                radio((), Spawn((Text::new("Three"), ThemedText))),
-                            ]
-                        )
-                    ]
-                ),
-            ]
-        ),],
-    )
 }

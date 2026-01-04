@@ -1,4 +1,4 @@
-use crate::prelude::*;
+use crate::{SpawnParameters, prelude::*};
 use avian3d::prelude::*;
 use bevy::prelude::*;
 
@@ -25,7 +25,7 @@ pub fn main() {
 
 fn start(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn(SceneRoot(asset_server.load("slime_map/mesh.glb#Scene0")));
-    //map::spawn(&asset_server, &mut commands);
+    //map::spawn(SpawnParameters::new(&asset_server, &mut commands));
 
     commands.spawn((
         Camera3d::default(),
