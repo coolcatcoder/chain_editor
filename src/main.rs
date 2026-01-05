@@ -117,10 +117,7 @@ fn render_node(
     for (entity, node) in nodes {
         info!("Updated.");
 
-        commands
-            .entity(entity)
-            .remove::<(SceneRoot, Mesh3d)>()
-            .despawn_children();
+        commands.entity(entity).despawn_children();
 
         match &node.mesh {
             NodeMesh::Sphere(material) => {
@@ -163,7 +160,7 @@ fn selected(selected: Res<Selected>, node: Query<(&Node, &Transform)>, mut gizmo
         return;
     };
 
-    gizmos.sphere(transform.translation, node.radius + 0.01, RED);
+    gizmos.sphere(transform.translation, node.radius + (0.01 * node.radius), RED);
 }
 
 #[derive(Resource, Component, Clone)]
@@ -179,8 +176,10 @@ struct Brush {
 
 fn join(
     on: On<Pointer<Click>>,
-    target: Query<(&GlobalTransform, Has<RigidBody>, Option<&FromNode>), With<Mesh3d>>,
-    nodes: Query<&Node>,
+    from_node: Query<&FromNode>,
+    target_without_node: Query<&GlobalTransform, With<Mesh3d>>,
+    target_with_node: Query<(&GlobalTransform, &Node)>,
+    has_rigid_body: Query<(), With<RigidBody>>,
     materials: Res<Materials>,
     join_mode: Res<JoinMode>,
     mut material_assets: ResMut<Assets<StandardMaterial>>,
@@ -188,67 +187,103 @@ fn join(
     brush: Res<Brush>,
     mut commands: Commands,
 ) {
-    // Surprisingly the window and its ilk can send Pointer<Click> events.
-    // Checking for the mesh while getting the transform filters them out.
-    let Ok((target_transform, target_has_rigid_body, target_node)) = target.get(on.entity) else {
+    if matches!(on.button, PointerButton::Secondary) {
         return;
-    };
-
-    match on.button {
-        PointerButton::Primary => (),
-        PointerButton::Secondary => return,
-        PointerButton::Middle => {
-            selected.0 = Some(on.entity);
-            return;
-        }
-    }
-
-    // Joints only work if both entities have rigid bodies.
-    if !target_has_rigid_body {
-        commands.entity(on.entity).insert(RigidBody::Static);
     }
 
     let hit_position = on.hit.position.unwrap();
 
-    let material = materials
+    let mut new_entity = move |commands: &mut Commands, brush: &Brush| {
+        let material = materials
         .0
         .iter()
         .next()
         .cloned()
         .unwrap_or_else(|| material_assets.add(StandardMaterial::default()));
-    let new_entity = commands
-        .spawn((
-            Transform::from_translation(hit_position),
-            Node {
-                mesh: NodeMesh::Sphere(material),
-                radius: brush.radius,
-            },
-            LockedAxes::ROTATION_LOCKED,
-            Mass(1.),
-            AngularInertia::from_shape(&Collider::sphere(brush.radius), 1.),
-            RigidBody::Dynamic,
-            GravityScale(-1.),
-            SleepingDisabled,
-            LinearDamping(1.),
-        ))
-        .id();
 
-    if let Some(target_node) = target_node
-        && let Ok(target_node) = nodes.get(target_node.0)
-        && matches!(*join_mode, JoinMode::AtCentre)
-    {
-        info!("Joined at centre.");
-        commands.spawn(
-            DistanceJoint::new(on.entity, new_entity)
-                .with_limits(0., target_node.radius + brush.radius).with_compliance(0.0001),
-        );
-    } else {
-        info!("Joined at position.");
-        commands.spawn(
-            DistanceJoint::new(on.entity, new_entity)
-                .with_limits(0., brush.radius)
-                .with_local_anchor1(hit_position - target_transform.translation()),
-        );
+        commands
+            .spawn((
+                Transform::from_translation(hit_position),
+                Node {
+                    mesh: NodeMesh::Sphere(material),
+                    radius: brush.radius,
+                },
+                LockedAxes::ROTATION_LOCKED,
+                Mass(1.),
+                AngularInertia::from_shape(&Collider::sphere(brush.radius), 1.),
+                RigidBody::Dynamic,
+                GravityScale(-1.),
+                SleepingDisabled,
+                LinearDamping(1.),
+            ))
+            .id()
+    };
+
+    // The only valid targets, are those that come from a node, and those with a mesh.
+    match from_node.get(on.entity) {
+        Ok(from_node) => {
+            let button = on.button;
+            let _on = on;
+            let target_entity = from_node.0;
+
+            let Ok((target_transform, target_node)) = target_with_node.get(target_entity) else {
+                error!("Failed to get target query from node entity.");
+                return;
+            };
+
+            if matches!(button, PointerButton::Middle) {
+                selected.0 = Some(target_entity);
+                return;
+            }
+
+            let new_entity = new_entity(&mut commands, &brush);
+
+            match *join_mode {
+                JoinMode::AtCentre => {
+                    info!("Joined at centre.");
+                    commands.spawn(
+                        DistanceJoint::new(target_entity, new_entity)
+                            .with_limits(0., target_node.radius + brush.radius)
+                    );
+                }
+                JoinMode::AtPosition => {
+                    info!("Joined at position.");
+                    commands.spawn(
+                        DistanceJoint::new(target_entity, new_entity)
+                            .with_limits(0., brush.radius)
+                            .with_local_anchor1(hit_position - target_transform.translation()),
+                    );
+                }
+            }
+        }
+        Err(_) => {
+            let target_entity = on.entity;
+            let button = on.button;
+            let _on = on;
+
+            let Ok(target_transform) = target_without_node.get(target_entity) else {
+                return;
+            };
+
+            // Joints only work if both entities have rigid bodies.
+            if has_rigid_body.get(target_entity).is_err() {
+                commands.entity(target_entity).insert(RigidBody::Static);
+            }
+
+            if matches!(button, PointerButton::Middle) {
+                selected.0 = None;
+                return;
+            }
+
+            let new_entity = new_entity(&mut commands, &brush);
+
+            info!("Joined at position.");
+            commands.spawn(
+                DistanceJoint::new(target_entity, new_entity)
+                    .with_limits(0., brush.radius)
+                    .with_local_anchor1(hit_position - target_transform.translation()),
+            );
+        }
     }
 }
 
