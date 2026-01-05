@@ -1,27 +1,28 @@
+#![allow(clippy::type_complexity)]
+#![allow(clippy::too_many_arguments)]
+
 use avian3d::prelude::*;
 use bevy::{
     camera::RenderTarget,
     color::palettes::css::RED,
     ecs::entity::EntityHashMap,
-    feathers::{
-        FeathersPlugins,
-        dark_theme::create_dark_theme,
-        theme::UiTheme,
-    },
+    feathers::{FeathersPlugins, dark_theme::create_dark_theme, theme::UiTheme},
     input::{
         ButtonState,
         keyboard::KeyboardInput,
         mouse::{MouseButtonInput, MouseMotion},
     },
+    input_focus::InputDispatchPlugin,
     prelude::*,
     ui_widgets::Activate,
     window::{CursorGrabMode, CursorOptions, WindowRef},
 };
+use bevy_ui_text_input::TextInputPlugin;
 use prelude::*;
 use quote::quote;
 use std::{collections::HashMap, f32::consts::FRAC_PI_2, fs::write};
 
-use crate::ui::UiBuilder;
+use crate::ui::{TextInputModified, UiBuilder};
 
 mod slime;
 mod ui;
@@ -40,17 +41,23 @@ fn main() {
 }
 
 fn plugin(app: &mut App) {
-    app.add_plugins((MeshPickingPlugin, FeathersPlugins))
-        .add_systems(Startup, start)
-        .add_systems(Update, (render_node, controls, mouse, selected))
-        .init_resource::<Materials>()
-        .init_resource::<Selected>()
-        .insert_resource(UiTheme(create_dark_theme()))
-        .add_observer(join);
+    app.add_plugins((
+        MeshPickingPlugin,
+        FeathersPlugins.build().disable::<InputDispatchPlugin>(),
+        TextInputPlugin,
+        TextInputModified::plugin,
+    ))
+    .add_systems(Startup, start)
+    .add_systems(Update, (render_node, controls, mouse, selected))
+    .init_resource::<Materials>()
+    .init_resource::<Selected>()
+    .insert_resource(UiTheme(create_dark_theme()))
+    .insert_resource(Brush { radius: 0.03 })
+    .add_observer(join);
 }
 
 fn start(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ui_builder: UiBuilder) {
-    commands.insert_resource(SphereMesh(meshes.add(Sphere::new(0.03))));
+    commands.insert_resource(SphereMesh(meshes.add(Sphere::new(1.))));
     // let material = materials.add(StandardMaterial {
     //     ..default()
     // });
@@ -74,11 +81,14 @@ fn start(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ui_builde
     //commands.spawn((ui(), UiTargetCamera(camera)));
     let mut ui = ui_builder.on_camera(camera);
 
-    ui.button("Test.")
-        .observe(|_: On<Activate>| info!("Test pressed!"))
-        .button("blah");
-    ui.radio_buttons([("Join at position.", JoinMode::AtPosition), ("Join at centre.", JoinMode::AtCentre)]);
-    ui.button("text");
+    ui.text("Join Mode");
+    ui.radio_buttons([
+        ("Join at centre.", JoinMode::AtCentre),
+        ("Join at position.", JoinMode::AtPosition),
+    ]);
+    ui.text("Brush");
+    ui.text("Radius:")
+        .numerical_input(|brush: &mut Brush, radius| brush.radius = radius);
 }
 
 #[derive(Component)]
@@ -88,11 +98,15 @@ struct EditorWindow;
 struct EditorCamera;
 
 #[derive(Component, Debug)]
+#[require(Visibility::Visible)]
 struct Node {
     mesh: NodeMesh,
     // Will not be accurate for shapes that are not perfect spheres.
     radius: f32,
 }
+
+#[derive(Component)]
+struct FromNode(Entity);
 
 fn render_node(
     nodes: Query<(Entity, &Node), Changed<Node>>,
@@ -101,13 +115,20 @@ fn render_node(
     mut commands: Commands,
 ) {
     for (entity, node) in nodes {
-        commands.entity(entity).remove::<(SceneRoot, Mesh3d)>();
+        info!("Updated.");
+
+        commands
+            .entity(entity)
+            .remove::<(SceneRoot, Mesh3d)>()
+            .despawn_children();
 
         match &node.mesh {
             NodeMesh::Sphere(material) => {
-                commands.entity(entity).insert((
+                commands.entity(entity).with_child((
                     Mesh3d(sphere_mesh.0.clone()),
                     MeshMaterial3d(material.clone()),
+                    Transform::from_scale(Vec3::splat(node.radius)),
+                    FromNode(entity),
                 ));
                 materials.0.insert(material.clone());
             }
@@ -151,13 +172,20 @@ enum JoinMode {
     AtCentre,
 }
 
+#[derive(Resource)]
+struct Brush {
+    radius: f32,
+}
+
 fn join(
     on: On<Pointer<Click>>,
-    target: Query<(&GlobalTransform, Has<RigidBody>, Option<&Node>), With<Mesh3d>>,
+    target: Query<(&GlobalTransform, Has<RigidBody>, Option<&FromNode>), With<Mesh3d>>,
+    nodes: Query<&Node>,
     materials: Res<Materials>,
     join_mode: Res<JoinMode>,
     mut material_assets: ResMut<Assets<StandardMaterial>>,
     mut selected: ResMut<Selected>,
+    brush: Res<Brush>,
     mut commands: Commands,
 ) {
     // Surprisingly the window and its ilk can send Pointer<Click> events.
@@ -193,28 +221,32 @@ fn join(
             Transform::from_translation(hit_position),
             Node {
                 mesh: NodeMesh::Sphere(material),
-                radius: 0.03,
+                radius: brush.radius,
             },
             LockedAxes::ROTATION_LOCKED,
             Mass(1.),
-            AngularInertia::from_shape(&Collider::sphere(0.03), 1.),
+            AngularInertia::from_shape(&Collider::sphere(brush.radius), 1.),
             RigidBody::Dynamic,
             GravityScale(-1.),
-            //SleepingDisabled,
+            SleepingDisabled,
+            LinearDamping(1.),
         ))
         .id();
 
-    if let Some(target_node) = target_node && matches!(*join_mode, JoinMode::AtCentre) {
+    if let Some(target_node) = target_node
+        && let Ok(target_node) = nodes.get(target_node.0)
+        && matches!(*join_mode, JoinMode::AtCentre)
+    {
         info!("Joined at centre.");
         commands.spawn(
             DistanceJoint::new(on.entity, new_entity)
-                .with_limits(0., target_node.radius + 0.03),
+                .with_limits(0., target_node.radius + brush.radius).with_compliance(0.0001),
         );
     } else {
         info!("Joined at position.");
         commands.spawn(
             DistanceJoint::new(on.entity, new_entity)
-                .with_limits(0., 0.03)
+                .with_limits(0., brush.radius)
                 .with_local_anchor1(hit_position - target_transform.translation()),
         );
     }

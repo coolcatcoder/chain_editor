@@ -4,14 +4,35 @@ use bevy::{
     ecs::system::{IntoObserverSystem, SystemParam},
     feathers::{
         controls::{ButtonProps, button, radio},
+        palette::GRAY_2,
         theme::{ThemeBackgroundColor, ThemedText},
         tokens,
     },
-    input_focus::tab_navigation::TabGroup,
+    input_focus::tab_navigation::{TabGroup, TabIndex},
     prelude::*,
     ui::Checked,
     ui_widgets::{RadioGroup, ValueChange, observe},
 };
+use bevy_ui_text_input::{TextInputContents, TextInputFilter, TextInputMode, TextInputNode};
+
+#[derive(EntityEvent)]
+pub struct TextInputModified {
+    #[event_target]
+    pub text_input: Entity,
+}
+
+impl TextInputModified {
+    pub fn plugin(app: &mut App) {
+        app.add_systems(
+            Update,
+            |text_inputs: Query<Entity, Changed<TextInputContents>>, mut commands: Commands| {
+                for text_input in text_inputs {
+                    commands.trigger(TextInputModified { text_input });
+                }
+            },
+        );
+    }
+}
 
 #[derive(SystemParam)]
 pub struct UiBuilder<'w, 's> {
@@ -74,7 +95,9 @@ impl Ui<'_, '_, '_> {
         radio_buttons: [(&'static str, T); LENGTH],
     ) {
         // Set default. See below comment.
-        self.row.commands.insert_resource(radio_buttons[0].1.clone());
+        self.row
+            .commands
+            .insert_resource(radio_buttons[0].1.clone());
 
         let buttons = radio_buttons.map(|(text, value)| {
             self.row
@@ -97,14 +120,22 @@ impl Ui<'_, '_, '_> {
                     row_gap: px(4),
                     ..default()
                 },
-                observe(move |on: On<ValueChange<Entity>>, mut value: ResMut<T>, values: Query<&T>, mut commands: Commands| {
-                    for button in buttons {
-                        commands.entity(button).remove::<Checked>();
-                    }
-                    commands.entity(on.value).insert(Checked);
+                observe(
+                    move |on: On<ValueChange<Entity>>,
+                          mut value: ResMut<T>,
+                          values: Query<&T>,
+                          mut commands: Commands| {
+                        for button in buttons {
+                            commands.entity(button).remove::<Checked>();
+                        }
+                        commands.entity(on.value).insert(Checked);
 
-                    *value = values.get(on.value).expect("All radio buttons will have T.").clone();
-                }),
+                        *value = values
+                            .get(on.value)
+                            .expect("All radio buttons will have T.")
+                            .clone();
+                    },
+                ),
             ))
             .id();
 
@@ -178,6 +209,53 @@ impl Row<'_, '_, '_> {
             .id();
         self.commands.entity(self.entity).add_child(button);
         self.previous_widget = Some(button);
+        self
+    }
+
+    pub fn text(&mut self, text: impl Into<String>) -> &mut Self {
+        let text = self.commands.spawn((Text::new(text), ThemedText)).id();
+        self.commands.entity(self.entity).add_child(text);
+        self.previous_widget = Some(text);
+        self
+    }
+
+    pub fn numerical_input<T: Resource>(&mut self, output: fn(&mut T, f32)) -> &mut Self {
+        let input = self
+            .commands
+            .spawn((
+                TextInputNode {
+                    mode: TextInputMode::SingleLine,
+                    ..default()
+                },
+                Node {
+                    width: Val::Percent(50.),
+                    //height: Val::Percent(20.),
+                    ..default()
+                },
+                BackgroundColor(GRAY_2),
+                TabIndex::default(),
+                TextInputContents::default(),
+                TextInputFilter::Decimal,
+            ))
+            .with_child(Text::new(" "))
+            .observe(
+                move |on: On<TextInputModified>,
+                      text_input: Query<&TextInputContents>,
+                      mut resource: ResMut<T>| {
+                    let Some(value) = text_input
+                        .get(on.text_input)
+                        .ok()
+                        .and_then(|text_input| text_input.get().parse::<f32>().ok())
+                    else {
+                        return;
+                    };
+
+                    output(&mut resource, value);
+                },
+            )
+            .id();
+        self.commands.entity(self.entity).add_child(input);
+        self.previous_widget = Some(input);
         self
     }
 }
