@@ -48,7 +48,17 @@ fn plugin(app: &mut App) {
         TextInputModified::plugin,
     ))
     .add_systems(Startup, start)
-    .add_systems(Update, (render_node, controls, mouse, selected, edit_node))
+    .add_systems(
+        Update,
+        (
+            render_node,
+            controls,
+            mouse,
+            selected,
+            edit_node,
+            change_link,
+        ),
+    )
     .init_resource::<Materials>()
     .init_resource::<Selected>()
     .insert_resource(UiTheme(create_dark_theme()))
@@ -97,6 +107,11 @@ struct EditorWindow;
 #[derive(Component)]
 struct EditorCamera;
 
+enum LocalAnchor {
+    MultiplyByRadius(Vec3),
+    Fixed,
+}
+
 #[derive(Component, Clone)]
 #[component(on_add = Self::on_add)]
 struct Link {
@@ -106,15 +121,49 @@ struct Link {
     local_anchor_two: Vec3,
 }
 
+fn change_link(links: Query<(&Link, &mut DistanceJoint), Changed<Link>>, nodes: Query<&Node>) {
+    for (link, mut distance_joint) in links {
+        info!("Changed link.");
+
+        let mut local_anchor_one = link.local_anchor_one;
+        let mut local_anchor_two = link.local_anchor_two;
+        let mut max_distance = 0.;
+
+        if let Ok(node) = nodes.get(link.entity_one) {
+            if link.local_anchor_one == Vec3::ZERO {
+                max_distance += node.radius;
+            } else {
+                local_anchor_one *= node.radius;
+            }
+        }
+        if let Ok(node) = nodes.get(link.entity_two) {
+            if link.local_anchor_two == Vec3::ZERO {
+                max_distance += node.radius;
+            } else {
+                local_anchor_two *= node.radius;
+            }
+        }
+
+        *distance_joint = DistanceJoint::new(link.entity_one, link.entity_two)
+            .with_local_anchor1(local_anchor_one)
+            .with_local_anchor2(local_anchor_two)
+            .with_limits(0., max_distance);
+    }
+}
+
 impl Link {
     fn on_add(mut world: DeferredWorld, context: HookContext) {
         let link = world
             .get::<Self>(context.entity)
             .expect("Expected Link to have a Link.")
             .clone();
+
         let mut commands = world.commands();
 
-        // Make sure there is some vaguely correct joint.
+        // We need to start with an incorrect, but sane default distance joint, so that we can query and modify it later.
+        commands
+            .entity(context.entity)
+            .insert(DistanceJoint::new(link.entity_one, link.entity_two).with_compliance(1.));
 
         commands
             .entity(link.entity_one)
@@ -146,7 +195,7 @@ struct FromNode(Entity);
 
 fn render_node(
     nodes: Query<(Entity, &Node, &Links), Changed<Node>>,
-    mut link: Query<(&Link, &mut DistanceJoint)>,
+    mut link: Query<&mut Link>,
     sphere_mesh: Res<SphereMesh>,
     mut materials: ResMut<Materials>,
     mut commands: Commands,
@@ -155,17 +204,8 @@ fn render_node(
         info!("Updated.");
 
         for link_entity in &links.0 {
-            let (link, mut distance_joint) = link.get_mut(*link_entity).expect("All links have Link.");
-
-            let (blah, anchor) = if entity == link.entity_one {
-                (link.local_anchor_one, &mut distance_joint.anchor1)
-            } else {
-                (link.local_anchor_two, &mut distance_joint.anchor2)
-            };
-
-            *anchor = JointAnchor::Local(blah * node.radius);
-
-            //let joint = DistanceJoint::new(link.entity_one, link.entity_two).with_local_anchor1(link.local_anchor_one * node_one.radius);
+            let mut link = link.get_mut(*link_entity).expect("All links have Link.");
+            link.set_changed();
         }
 
         commands.entity(entity).despawn_children();
@@ -304,26 +344,30 @@ fn join(
             }
 
             let new_entity = new_entity(&mut commands, &brush);
-            // commands.spawn(Link {
-            //     entity_one: target_entity,
-            //     entity_two: new_entity,
-            // });
 
             match *join_mode {
                 JoinMode::AtCentre => {
                     info!("Joined at centre.");
-                    commands.spawn(
-                        DistanceJoint::new(target_entity, new_entity)
-                            .with_limits(0., target_node.radius + brush.radius),
-                    );
+                    commands.spawn(Link {
+                        entity_one: target_entity,
+                        local_anchor_one: Vec3::ZERO,
+                        entity_two: new_entity,
+                        local_anchor_two: Vec3::ZERO,
+                    });
                 }
                 JoinMode::AtPosition => {
                     info!("Joined at position.");
-                    commands.spawn(
-                        DistanceJoint::new(target_entity, new_entity)
-                            .with_limits(0., brush.radius)
-                            .with_local_anchor1(hit_position - target_transform.translation()),
-                    );
+                    // commands.spawn(
+                    //     DistanceJoint::new(target_entity, new_entity)
+                    //         .with_limits(0., brush.radius)
+                    //         .with_local_anchor1(hit_position - target_transform.translation()),
+                    // );
+                    commands.spawn(Link {
+                        entity_one: target_entity,
+                        local_anchor_one: (hit_position - target_transform.translation()) / target_node.radius,
+                        entity_two: new_entity,
+                        local_anchor_two: Vec3::ZERO,
+                    });
                 }
             }
         }
