@@ -5,7 +5,7 @@ use avian3d::prelude::*;
 use bevy::{
     camera::RenderTarget,
     color::palettes::css::RED,
-    ecs::entity::EntityHashMap,
+    ecs::{entity::EntityHashMap, lifecycle::HookContext, world::DeferredWorld},
     feathers::{FeathersPlugins, dark_theme::create_dark_theme, theme::UiTheme},
     input::{
         ButtonState,
@@ -48,7 +48,7 @@ fn plugin(app: &mut App) {
         TextInputModified::plugin,
     ))
     .add_systems(Startup, start)
-    .add_systems(Update, (render_node, controls, mouse, selected))
+    .add_systems(Update, (render_node, controls, mouse, selected, edit_node))
     .init_resource::<Materials>()
     .init_resource::<Selected>()
     .insert_resource(UiTheme(create_dark_theme()))
@@ -97,8 +97,44 @@ struct EditorWindow;
 #[derive(Component)]
 struct EditorCamera;
 
+#[derive(Component, Clone)]
+#[component(on_add = Self::on_add)]
+struct Link {
+    entity_one: Entity,
+    local_anchor_one: Vec3,
+    entity_two: Entity,
+    local_anchor_two: Vec3,
+}
+
+impl Link {
+    fn on_add(mut world: DeferredWorld, context: HookContext) {
+        let link = world
+            .get::<Self>(context.entity)
+            .expect("Expected Link to have a Link.")
+            .clone();
+        let mut commands = world.commands();
+
+        // Make sure there is some vaguely correct joint.
+
+        commands
+            .entity(link.entity_one)
+            .entry::<Links>()
+            .or_default()
+            .and_modify(move |mut links| links.0.push(context.entity));
+        commands
+            .entity(link.entity_two)
+            .entry::<Links>()
+            .or_default()
+            .and_modify(move |mut links| links.0.push(context.entity));
+    }
+}
+
+/// The entities refer to the entity with a joint/link, not another node.
+#[derive(Component, Default)]
+struct Links(Vec<Entity>);
+
 #[derive(Component, Debug)]
-#[require(Visibility::Visible)]
+#[require(Visibility::Visible, Links)]
 struct Node {
     mesh: NodeMesh,
     // Will not be accurate for shapes that are not perfect spheres.
@@ -109,13 +145,28 @@ struct Node {
 struct FromNode(Entity);
 
 fn render_node(
-    nodes: Query<(Entity, &Node), Changed<Node>>,
+    nodes: Query<(Entity, &Node, &Links), Changed<Node>>,
+    mut link: Query<(&Link, &mut DistanceJoint)>,
     sphere_mesh: Res<SphereMesh>,
     mut materials: ResMut<Materials>,
     mut commands: Commands,
 ) {
-    for (entity, node) in nodes {
+    for (entity, node, links) in nodes {
         info!("Updated.");
+
+        for link_entity in &links.0 {
+            let (link, mut distance_joint) = link.get_mut(*link_entity).expect("All links have Link.");
+
+            let (blah, anchor) = if entity == link.entity_one {
+                (link.local_anchor_one, &mut distance_joint.anchor1)
+            } else {
+                (link.local_anchor_two, &mut distance_joint.anchor2)
+            };
+
+            *anchor = JointAnchor::Local(blah * node.radius);
+
+            //let joint = DistanceJoint::new(link.entity_one, link.entity_two).with_local_anchor1(link.local_anchor_one * node_one.radius);
+        }
 
         commands.entity(entity).despawn_children();
 
@@ -160,7 +211,11 @@ fn selected(selected: Res<Selected>, node: Query<(&Node, &Transform)>, mut gizmo
         return;
     };
 
-    gizmos.sphere(transform.translation, node.radius + (0.01 * node.radius), RED);
+    gizmos.sphere(
+        transform.translation,
+        node.radius + (0.01 * node.radius),
+        RED,
+    );
 }
 
 #[derive(Resource, Component, Clone)]
@@ -172,6 +227,18 @@ enum JoinMode {
 #[derive(Resource)]
 struct Brush {
     radius: f32,
+}
+
+fn edit_node(brush: Res<Brush>, selected: Res<Selected>, mut node: Query<&mut Node>) {
+    if !brush.is_changed() {
+        return;
+    }
+    let Some(mut selected) = selected.0.and_then(|selected| node.get_mut(selected).ok()) else {
+        return;
+    };
+
+    info!("Update entity.");
+    selected.radius = brush.radius;
 }
 
 fn join(
@@ -195,11 +262,11 @@ fn join(
 
     let mut new_entity = move |commands: &mut Commands, brush: &Brush| {
         let material = materials
-        .0
-        .iter()
-        .next()
-        .cloned()
-        .unwrap_or_else(|| material_assets.add(StandardMaterial::default()));
+            .0
+            .iter()
+            .next()
+            .cloned()
+            .unwrap_or_else(|| material_assets.add(StandardMaterial::default()));
 
         commands
             .spawn((
@@ -237,13 +304,17 @@ fn join(
             }
 
             let new_entity = new_entity(&mut commands, &brush);
+            // commands.spawn(Link {
+            //     entity_one: target_entity,
+            //     entity_two: new_entity,
+            // });
 
             match *join_mode {
                 JoinMode::AtCentre => {
                     info!("Joined at centre.");
                     commands.spawn(
                         DistanceJoint::new(target_entity, new_entity)
-                            .with_limits(0., target_node.radius + brush.radius)
+                            .with_limits(0., target_node.radius + brush.radius),
                     );
                 }
                 JoinMode::AtPosition => {
