@@ -5,111 +5,104 @@ pub fn spawn(mut parameters: crate::SpawnParameters) {
             0u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(0.0075898906f32, 0.3270603f32, 0.0068903523f32)),
+                .translation(Vec3::new(0.0057866573f32, 0.32701734f32, 0.0064867586f32)),
         );
     parameters
         .set_node(
             2u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(-0.017310793f32, 0.85747045f32, 0.0043839775f32)),
+                .translation(Vec3::new(-0.01250705f32, 0.31281292f32, -0.04859745f32)),
         );
     parameters
         .set_node(
             3u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(0.21349843f32, 1.2651612f32, -0.23856199f32)),
+                .translation(Vec3::new(0.0038794589f32, 0.35911578f32, -0.067878835f32)),
         );
     parameters
         .set_node(
             4u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(0.18761933f32, 1.3204546f32, -0.26490286f32)),
+                .translation(Vec3::new(0.020620622f32, 0.40739465f32, -0.08477401f32)),
         );
     parameters
         .set_node(
             5u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(0.044704456f32, 1.0466682f32, -0.4550515f32)),
+                .translation(Vec3::new(0.030557737f32, 0.45023948f32, -0.109918065f32)),
         );
     parameters
         .set_node(
             6u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(-0.054475263f32, 1.4381504f32, -0.067215525f32)),
+                .translation(Vec3::new(0.043138362f32, 0.48992246f32, -0.13532142f32)),
         );
     parameters
         .set_node(
             7u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(-0.35883844f32, 1.161159f32, -0.27277297f32)),
+                .translation(Vec3::new(0.06929875f32, 0.5152485f32, -0.14889584f32)),
         );
     parameters
         .set_node(
             8u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(-0.21612118f32, 0.95210606f32, -0.46449f32)),
+                .translation(Vec3::new(0.08571911f32, 0.56893855f32, -0.14121868f32)),
         );
     parameters
         .set_node(
             9u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(0.42458472f32, 1.0709947f32, -0.08300074f32)),
+                .translation(Vec3::new(-0.378732f32, 0.030399157f32, 0.94448394f32)),
         );
     parameters
         .set_node(
             10u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(-0.032187566f32, 1.3731585f32, -0.2523614f32)),
+                .translation(Vec3::new(-0.37873268f32, 0.09073181f32, 0.9444845f32)),
         );
     parameters
         .set_node(
             11u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(0.29555514f32, 0.9651181f32, -0.38283068f32)),
+                .translation(Vec3::new(-0.37873346f32, 0.15099792f32, 0.94448525f32)),
         );
     parameters
         .set_node(
             12u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(0.26856753f32, 1.3384591f32, 0.009253221f32)),
+                .translation(Vec3::new(-0.3787344f32, 0.2111975f32, 0.944486f32)),
         );
     parameters
         .set_node(
             13u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(-0.21762113f32, 0.8616425f32, -0.44728655f32)),
+                .translation(Vec3::new(-0.3787369f32, 0.34133056f32, 0.9444881f32)),
         );
     parameters
         .set_node(
             14u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(0.14168382f32, 0.8662398f32, -0.47238436f32)),
+                .translation(Vec3::new(-0.37874168f32, 0.5413971f32, 0.944492f32)),
         );
     parameters
         .set_node(
             15u32,
             crate::NodeBuilder::default()
                 .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(-0.08860277f32, 1.2608554f32, -0.3896826f32)),
-        );
-    parameters
-        .set_node(
-            16u32,
-            crate::NodeBuilder::default()
-                .mesh(crate::NodeMeshSerialised::Sphere(1u32))
-                .translation(Vec3::new(0.23517583f32, 1.2485181f32, -0.27850637f32)),
+                .translation(Vec3::new(-0.37874535f32, 0.7413971f32, 0.9444952f32)),
         );
 }
