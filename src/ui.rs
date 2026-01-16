@@ -261,29 +261,23 @@ impl Row<'_, '_, '_> {
 
     pub fn checkbox(&mut self, text: impl Into<String>, checked: bool) -> &mut Self {
         let button = if checked {
-            self
-            .commands
-            .spawn(checkbox(
-                Checked,
-                Spawn((Text::new(text), ThemedText)),
-            ))
-            .id()
+            self.commands
+                .spawn(checkbox(Checked, Spawn((Text::new(text), ThemedText))))
+                .id()
         } else {
-            self
-            .commands
-            .spawn(checkbox(
-                (),
-                Spawn((Text::new(text), ThemedText)),
-            ))
-            .id()
+            self.commands
+                .spawn(checkbox((), Spawn((Text::new(text), ThemedText))))
+                .id()
         };
-        self.commands.entity(button).observe(|on: On<ValueChange<bool>>, mut commands: Commands| {
-            if on.value {
-                commands.entity(on.source).insert(Checked);
-            } else {
-                commands.entity(on.source).remove::<Checked>();
-            }
-        });
+        self.commands.entity(button).observe(
+            |on: On<ValueChange<bool>>, mut commands: Commands| {
+                if on.value {
+                    commands.entity(on.source).insert(Checked);
+                } else {
+                    commands.entity(on.source).remove::<Checked>();
+                }
+            },
+        );
         self.commands.entity(self.entity).add_child(button);
         self.previous_widget = Some(button);
         self

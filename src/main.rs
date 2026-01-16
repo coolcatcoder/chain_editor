@@ -3,6 +3,7 @@
 
 use avian3d::prelude::*;
 use bevy::{
+    asset::RenderAssetUsages,
     camera::RenderTarget,
     color::palettes::css::RED,
     ecs::{entity::EntityHashMap, lifecycle::HookContext, world::DeferredWorld},
@@ -13,6 +14,10 @@ use bevy::{
         mouse::{MouseButtonInput, MouseMotion},
     },
     input_focus::InputDispatchPlugin,
+    mesh::{
+        Indices, PrimitiveTopology, VertexAttributeValues,
+        skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
+    },
     prelude::*,
     ui_widgets::Activate,
     window::{CursorGrabMode, CursorOptions, WindowRef},
@@ -66,14 +71,23 @@ fn plugin(app: &mut App) {
     .insert_resource(Brush { radius: 0.03 })
     .add_observer(on_click)
     .init_gizmo_group::<LinkGizmos>()
-    .insert_gizmo_config(LinkGizmos, GizmoConfig { depth_bias: -1., ..default() });
+    .insert_gizmo_config(
+        LinkGizmos,
+        GizmoConfig {
+            depth_bias: -1.,
+            ..default()
+        },
+    );
 }
 
-fn start(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ui_builder: UiBuilder) {
+fn start(
+    mut commands: Commands,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut skinned_mesh_inverse_bindposes_assets: ResMut<Assets<SkinnedMeshInverseBindposes>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut ui_builder: UiBuilder,
+) {
     commands.insert_resource(SphereMesh(meshes.add(Sphere::new(1.))));
-    // let material = materials.add(StandardMaterial {
-    //     ..default()
-    // });
 
     let window = commands
         .spawn((Window::default(), EditorWindow))
@@ -103,6 +117,63 @@ fn start(mut commands: Commands, mut meshes: ResMut<Assets<Mesh>>, mut ui_builde
     ui.text("Radius")
         .numerical_input(|brush: &mut Brush, radius| brush.radius = radius);
     ui.checkbox("Gravity", true);
+
+    let inverse_bindposes = skinned_mesh_inverse_bindposes_assets.add(vec![
+        Mat4::IDENTITY,
+        Mat4::from_translation(Vec3::Y * 1.).inverse(),
+    ]);
+
+    let mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_POSITION,
+        vec![
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+        ],
+    )
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_JOINT_INDEX,
+        VertexAttributeValues::Uint16x4(vec![
+            [1, 0, 0, 0],
+            [1, 0, 0, 0],
+            [0, 1, 0, 0],
+            [0, 1, 0, 0],
+        ]),
+    )
+    .with_inserted_attribute(
+        Mesh::ATTRIBUTE_JOINT_WEIGHT,
+        vec![
+            [0., 1., 0., 0.],
+            [0., 1., 0., 0.],
+            [1., 0., 0., 0.],
+            [1., 0., 0., 0.],
+        ],
+    )
+    .with_inserted_indices(Indices::U16(vec![0, 1, 2, 1, 3, 2]));
+
+    let mesh = meshes.add(mesh);
+    let material = materials.add(StandardMaterial { ..default() });
+
+    let joint_0 = commands
+        .spawn(Transform::IDENTITY)
+        .id();
+    let joint_1 = commands.spawn(Transform::from_translation(Vec3::Y * 1.)).id();
+    let joints = vec![joint_0, joint_1];
+
+    commands.spawn((
+        Mesh3d(mesh),
+        MeshMaterial3d(material),
+        Transform::IDENTITY,
+        SkinnedMesh {
+            inverse_bindposes,
+            joints,
+        },
+    )); //
 }
 
 #[derive(Component)]
@@ -127,7 +198,10 @@ struct Link {
 
 fn change_link(links: Query<(&Link, &mut DistanceJoint), Changed<Link>>, nodes: Query<&Node>) {
     for (link, mut distance_joint) in links {
-        info!("Changed link. ({:?}, {:?})", link.entity_one, link.entity_two);
+        info!(
+            "Changed link. ({:?}, {:?})",
+            link.entity_one, link.entity_two
+        );
 
         let mut local_anchor_one = link.local_anchor_one;
         let mut local_anchor_two = link.local_anchor_two;
@@ -157,15 +231,27 @@ fn change_link(links: Query<(&Link, &mut DistanceJoint), Changed<Link>>, nodes: 
 
 #[derive(GizmoConfigGroup, Default, Reflect)]
 struct LinkGizmos;
-fn link_gizmos(links: Query<&Link>, transforms: Query<&GlobalTransform>, mut gizmos: Gizmos<LinkGizmos>) {
+fn link_gizmos(
+    links: Query<&Link>,
+    transforms: Query<&GlobalTransform>,
+    mut gizmos: Gizmos<LinkGizmos>,
+) {
     for link in links {
-        let translation_one = transforms.get(link.entity_one).ok().map(|transform| transform.translation() + link.local_anchor_one );
-        let translation_two = transforms.get(link.entity_two).ok().map(|transform| transform.translation() + link.local_anchor_two );
+        let translation_one = transforms
+            .get(link.entity_one)
+            .ok()
+            .map(|transform| transform.translation() + link.local_anchor_one);
+        let translation_two = transforms
+            .get(link.entity_two)
+            .ok()
+            .map(|transform| transform.translation() + link.local_anchor_two);
         let Some((translation_one, translation_two)) = translation_one.zip(translation_two) else {
             continue;
         };
 
-        gizmos.arrow(translation_one, translation_two, RED).with_double_end();
+        gizmos
+            .arrow(translation_one, translation_two, RED)
+            .with_double_end();
     }
 }
 
@@ -200,6 +286,63 @@ impl Link {
 #[derive(Component, Default)]
 struct Links(Vec<Entity>);
 
+#[derive(Component, Clone)]
+#[component(on_add = Self::on_add)]
+struct Bridge {
+    node_one: Entity,
+    node_two: Entity,
+}
+
+impl Bridge {
+    fn on_add(mut world: DeferredWorld, context: HookContext) {
+        let bridge = world
+            .get::<Self>(context.entity)
+            .expect("Expected Link to have a Link.")
+            .clone();
+
+        let mut commands = world.commands();
+
+        commands
+            .entity(bridge.node_one)
+            .entry::<Bridges>()
+            .or_default()
+            .and_modify(move |mut bridges| bridges.0.push(context.entity));
+        commands
+            .entity(bridge.node_two)
+            .entry::<Bridges>()
+            .or_default()
+            .and_modify(move |mut bridges| bridges.0.push(context.entity));
+    }
+}
+
+fn bridge_gizmos(
+    links: Query<&Bridge>,
+    transforms: Query<&GlobalTransform>,
+    mut gizmos: Gizmos<LinkGizmos>,
+) {
+    for link in links {
+        // let translation_one = transforms
+        //     .get(link.entity_one)
+        //     .ok()
+        //     .map(|transform| transform.translation() + link.local_anchor_one);
+        // let translation_two = transforms
+        //     .get(link.entity_two)
+        //     .ok()
+        //     .map(|transform| transform.translation() + link.local_anchor_two);
+        // let Some((translation_one, translation_two)) = translation_one.zip(translation_two) else {
+        //     continue;
+        // };
+
+        // gizmos
+        //     .arrow(translation_one, translation_two, RED)
+        //     .with_double_end();
+    }
+}
+
+/// The entities refer to the entity with a joint/link, not another node.
+#[derive(Component, Default)]
+struct Bridges(Vec<Entity>);
+
 #[derive(Component, Debug)]
 #[require(Visibility::Visible, Links, RigidBody)]
 struct Node {
@@ -227,13 +370,14 @@ fn create_node(
         }
 
         commands.entity(entity).despawn_children().insert((
-                LockedAxes::ROTATION_LOCKED,
-                Mass(1.),
-                AngularInertia::from_shape(&Collider::sphere(node.radius), 1.),
-                RigidBody::Dynamic,
-                GravityScale(-1.),
-                SleepingDisabled,
-                LinearDamping(1.),));
+            LockedAxes::ROTATION_LOCKED,
+            Mass(1.),
+            AngularInertia::from_shape(&Collider::sphere(node.radius), 1.),
+            RigidBody::Dynamic,
+            GravityScale(-1.),
+            SleepingDisabled,
+            LinearDamping(1.),
+        ));
 
         match &node.mesh {
             NodeMesh::Sphere(material) => {
@@ -327,19 +471,30 @@ fn on_click(
     brush: Res<Brush>,
     mut commands: Commands,
 ) {
+    // Makes certain that whatever we are clicking on has a Mesh3d, and might have a node.
+    let Some((node, target_transform, target_entity)) =
+        target.get(on.entity).ok().map(|(from_node, transform)| {
+            let mut target_entity = on.entity;
+            (
+                from_node.and_then(|from_node| {
+                    target_entity = from_node.0;
+                    node.get(from_node.0).ok()
+                }),
+                transform,
+                target_entity,
+            )
+        })
+    else {
+        return;
+    };
+
     match on.button {
         PointerButton::Primary => {
-            // Makes certain that whatever we are clicking on has a Mesh3d, and might have a node.
-            let Some((node, target_transform)) = target.get(on.entity).ok().map(|(from_node, transform)| (from_node.and_then(|from_node| node.get(from_node.0).ok()), transform)) else {
-                return;
-            };
-            let target_entity = node.map(|(entity, _)| entity).unwrap_or(on.entity);
-
             // Joints only work if both entities have rigid bodies.
             if has_rigid_body.get(target_entity).is_err() {
                 commands.entity(target_entity).insert(RigidBody::Static);
             }
-            
+
             *selected = Selected::None;
 
             let Some(hit_translation) = on.hit.position else {
@@ -354,13 +509,17 @@ fn on_click(
                 .cloned()
                 .unwrap_or_else(|| material_assets.add(StandardMaterial::default()));
 
-            let new_entity = commands.spawn((Transform::from_translation(hit_translation),
-                Node {
-                    mesh: NodeMesh::Sphere(material),
-                    radius: brush.radius,
-                },)).id();
+            let new_entity = commands
+                .spawn((
+                    Transform::from_translation(hit_translation),
+                    Node {
+                        mesh: NodeMesh::Sphere(material),
+                        radius: brush.radius,
+                    },
+                ))
+                .id();
 
-            match (join_mode.clone(), node) {
+            match (&*join_mode, node) {
                 (JoinMode::AtCentre, Some(node)) => {
                     info!("Joined at centre.");
                     commands.spawn(Link {
@@ -374,7 +533,8 @@ fn on_click(
                     info!("Joined at position.");
                     commands.spawn(Link {
                         entity_one: node.0,
-                        local_anchor_one: (hit_translation - target_transform.translation()) / node.1.radius,
+                        local_anchor_one: (hit_translation - target_transform.translation())
+                            / node.1.radius,
                         entity_two: new_entity,
                         local_anchor_two: Vec3::ZERO,
                     });
@@ -391,120 +551,16 @@ fn on_click(
             }
         }
         PointerButton::Secondary => (),
-        PointerButton::Middle => {
-            error!("Middle button not implemented.");
-        }
+        PointerButton::Middle => match (&*selected, node) {
+            (Selected::None, Some(_)) => {
+                *selected = Selected::Node(target_entity);
+            }
+            (Selected::Node(selected_entity), Some(_)) if *selected_entity == target_entity => {
+                *selected = Selected::None;
+            }
+            _ => error!("Unrecognised middle mouse button command."),
+        },
     }
-
-    // Old:
-    /*
-    if matches!(on.button, PointerButton::Secondary) {
-        return;
-    }
-
-    let hit_position = on.hit.position.unwrap();
-
-    let mut new_entity = move |commands: &mut Commands, brush: &Brush| {
-        let material = materials
-            .0
-            .iter()
-            .next()
-            .cloned()
-            .unwrap_or_else(|| material_assets.add(StandardMaterial::default()));
-
-        commands
-            .spawn((
-                Transform::from_translation(hit_position),
-                Node {
-                    mesh: NodeMesh::Sphere(material),
-                    radius: brush.radius,
-                },
-                LockedAxes::ROTATION_LOCKED,
-                Mass(1.),
-                AngularInertia::from_shape(&Collider::sphere(brush.radius), 1.),
-                RigidBody::Dynamic,
-                GravityScale(-1.),
-                SleepingDisabled,
-                LinearDamping(1.),
-            ))
-            .id()
-    };
-
-    // The only valid targets, are those that come from a node, and those with a mesh.
-    match from_node.get(on.entity) {
-        Ok(from_node) => {
-            let button = on.button;
-            let _on = on;
-            let target_entity = from_node.0;
-
-            let Ok((target_transform, target_node)) = target_with_node.get(target_entity) else {
-                error!("Failed to get target query from node entity.");
-                return;
-            };
-
-            if matches!(button, PointerButton::Middle) {
-                selected.0 = Some(target_entity);
-                return;
-            }
-
-            let new_entity = new_entity(&mut commands, &brush);
-
-            match *join_mode {
-                JoinMode::AtCentre => {
-                    info!("Joined at centre.");
-                    commands.spawn(Link {
-                        entity_one: target_entity,
-                        local_anchor_one: Vec3::ZERO,
-                        entity_two: new_entity,
-                        local_anchor_two: Vec3::ZERO,
-                    });
-                }
-                JoinMode::AtPosition => {
-                    info!("Joined at position.");
-                    // commands.spawn(
-                    //     DistanceJoint::new(target_entity, new_entity)
-                    //         .with_limits(0., brush.radius)
-                    //         .with_local_anchor1(hit_position - target_transform.translation()),
-                    // );
-                    commands.spawn(Link {
-                        entity_one: target_entity,
-                        local_anchor_one: (hit_position - target_transform.translation()) / target_node.radius,
-                        entity_two: new_entity,
-                        local_anchor_two: Vec3::ZERO,
-                    });
-                }
-            }
-        }
-        Err(_) => {
-            let target_entity = on.entity;
-            let button = on.button;
-            let _on = on;
-
-            let Ok(target_transform) = target_without_node.get(target_entity) else {
-                return;
-            };
-
-            // Joints only work if both entities have rigid bodies.
-            if has_rigid_body.get(target_entity).is_err() {
-                commands.entity(target_entity).insert(RigidBody::Static);
-            }
-
-            if matches!(button, PointerButton::Middle) {
-                selected.0 = None;
-                return;
-            }
-
-            let new_entity = new_entity(&mut commands, &brush);
-
-            info!("Joined at position.");
-            commands.spawn(
-                DistanceJoint::new(target_entity, new_entity)
-                    .with_limits(0., brush.radius)
-                    .with_local_anchor1(hit_position - target_transform.translation()),
-            );
-        }
-    }
-    */
 }
 
 fn mouse(

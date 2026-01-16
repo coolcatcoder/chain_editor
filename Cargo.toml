@@ -40,8 +40,8 @@ bevy = { version = "0.17.2", default-features = false, features = [
     #"trace",
     ]}
 avian3d = { version = "0.4.1"}
-quote = "1.0.42"
-proc-macro2 = "1.0.104"
+quote = "1.0.43"
+proc-macro2 = "1.0.105"
 prettyplease = "0.2.37"
-syn = "2.0.113"
+syn = "2.0.114"
 bevy_ui_text_input = "0.6.0"
